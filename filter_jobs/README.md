@@ -40,6 +40,41 @@ The `archive/` directory is gitignored.
 
 ---
 
+## Run from anywhere (standalone)
+
+This script does **not** depend on the rest of this repo (`scripts/`, `js/`, `data/`, etc.). It only needs the `.py` file, Python, `requests`, and the network. Job data is downloaded from the public [job-board-data](https://feashliaa.github.io/job-board-data/) site.
+
+Copy the file to any folder and run it there:
+
+```bash
+# Windows example
+mkdir D:\tools
+copy filter_jobs.py D:\tools\
+cd D:\tools
+pip install requests
+python filter_jobs.py
+```
+
+```bash
+# macOS / Linux example
+mkdir -p ~/tools
+cp filter_jobs.py ~/tools/
+cd ~/tools
+pip install requests
+python filter_jobs.py
+```
+
+By default, results go next to the script: `<folder-of-filter_jobs.py>/archive/YYYY-MM-DD_HHMMSS/`. Use `-o` or `--archive-root` to write somewhere else.
+
+You can also invoke it by full path from any working directory:
+
+```bash
+python D:\tools\filter_jobs.py
+python /home/you/tools/filter_jobs.py
+```
+
+---
+
 ## How it works
 
 1. Fetch `jobs_manifest.json` for the chunk list  
@@ -215,8 +250,9 @@ python filter_jobs.py --no-remote-only --include-recruiters --posted 3
 ## Requirements
 
 - Python 3.10+ recommended  
-- `requests` (`pip install -r ../requirements.txt` or the repo-root `requirements.txt`)  
+- `requests` (`pip install requests`, or the repo-root `requirements.txt` if you are in this project)  
 - Network access to download public GitHub Pages chunks  
+- The rest of this repository is **optional** — see [Run from anywhere](#run-from-anywhere-standalone)
 
 ---
 
