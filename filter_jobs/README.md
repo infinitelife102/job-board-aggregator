@@ -261,6 +261,10 @@ python filter_jobs.py --no-remote-only --include-recruiters --posted 3
 
 ---
 
+## Updating later
+
+Job listings do not need Git. To copy newer **code** from upstream onto `feat/filter-jobs` without uploading the full history, see [SYNC.md](SYNC.md).
+
 ## Notes
 
 - This tool **filters and exports**; it does not scrape ATS sites. Use `scripts/scraper.py` for a full scrape.  
