@@ -8,7 +8,6 @@ __pycache__/
 
 # Virtual environments
 venv/
-.venv/
 env/
 
 # IDE and editor files
@@ -47,10 +46,6 @@ js/old_script.js
 
 # Scraper output
 scripts/output/
-
-# Local filtered job archives (filter_jobs/)
-filter_jobs/archive/
-scripts/filtered_archive/
 
 # Test Files
 scripts/tests/test_icims.py

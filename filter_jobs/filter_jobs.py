@@ -7,12 +7,13 @@ Default filters (run with no args):
   Location: United States
   ATS: all
   Experience: all
-  Date posted: last 24 hours (--posted 1)
+  Date posted: previous calendar day in America/New_York (--posted 1)
   Remote only: on
   Hide recruiter-posted jobs: on
   Keyword preset: it (broad title include + common excludes)
 
-Each run writes under filter_jobs/archive/<YYYY-MM-DD_HHMMSS>/:
+Each run writes under filter_jobs/archive/<collected-date>/
+(e.g. archive/2026-08-18 for --posted 1 in America/New_York):
   filters.json, jobs.json, urls.txt, jobs.csv
 
 See filter_jobs/README.md for full usage.
@@ -26,8 +27,9 @@ import gzip
 import json
 import re
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import requests
 
@@ -50,6 +52,19 @@ SKILL_CHOICES = ["intern", "entry", "mid", "senior"]
 STATUS_CHOICES = ["saved", "applied", "ignored"]
 POSTED_CHOICES = ["1", "3", "7", "30"]
 PRESET_CHOICES = ["it", "none"]
+POSTED_WINDOW_CHOICES = ["calendar", "rolling"]
+DEFAULT_DATE_TZ = "America/New_York"
+US_LOCATION_ALIASES = (
+    "United States",
+    "United States of America",
+    "USA",
+    "US",
+    "U.S",
+    "U.S.",
+    "U.S.A",
+    "U.S.A.",
+)
+US_LOCATION_KEYS = {a.lower().rstrip(".") for a in US_LOCATION_ALIASES}
 
 # Title substring lists (same matching as --include / --exclude).
 # Broad on purpose: prefer recall; trim false positives via IT_EXCLUDE / --exclude.
@@ -191,6 +206,35 @@ def word_boundary_re(term: str) -> re.Pattern:
     return re.compile(rf"\b{escape_regex(term)}\b", re.IGNORECASE)
 
 
+def load_date_tz(name: str) -> ZoneInfo:
+    try:
+        return ZoneInfo(name)
+    except ZoneInfoNotFoundError:
+        raise SystemExit(
+            f"Unknown timezone {name!r}. On Windows install tzdata: pip install tzdata"
+        ) from None
+
+
+def parse_job_datetime(raw) -> datetime | None:
+    if not raw:
+        return None
+    try:
+        t = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if t.tzinfo is None:
+        t = t.replace(tzinfo=timezone.utc)
+    return t
+
+
+def location_terms(location: str) -> list[str]:
+    """Treat United States / USA / US / U.S. as the same country filter."""
+    key = location.strip().lower().rstrip(".")
+    if key in US_LOCATION_KEYS:
+        return list(US_LOCATION_ALIASES)
+    return [location] if location.strip() else []
+
+
 def compile_terms(csv_terms: str) -> list[re.Pattern]:
     return [
         word_boundary_re(t.strip())
@@ -283,17 +327,22 @@ def matches_job(job: dict, args: argparse.Namespace, apps: dict) -> bool:
     if args.posted:
         days = int(args.posted)
         raw = job.get("updated_at") or job.get("first_seen")
-        if not raw:
+        t = parse_job_datetime(raw)
+        if not t:
             return False
-        try:
-            t = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
-            if t.tzinfo is None:
-                t = t.replace(tzinfo=timezone.utc)
+        date_tz = getattr(args, "date_tzinfo", None) or timezone.utc
+        window = getattr(args, "posted_window", "calendar")
+        if window == "rolling":
             age_days = (datetime.now(timezone.utc) - t).total_seconds() / 86400
-        except ValueError:
-            return False
-        if age_days > days:
-            return False
+            if age_days > days:
+                return False
+        else:
+            job_day = t.astimezone(date_tz).date()
+            today = datetime.now(date_tz).date()
+            oldest = today - timedelta(days=days)
+            newest = today - timedelta(days=1)
+            if job_day < oldest or job_day > newest:
+                return False
 
     exclude_patterns = getattr(args, "exclude_patterns", None) or []
     if exclude_patterns and any(p.search(title) for p in exclude_patterns):
@@ -307,7 +356,10 @@ def matches_job(job: dict, args: argparse.Namespace, apps: dict) -> bool:
         return False
     if args.company and not word_boundary_re(args.company).search(company):
         return False
-    if args.location and not word_boundary_re(args.location).search(location):
+    location_patterns = getattr(args, "location_patterns", None)
+    if location_patterns is None and args.location:
+        location_patterns = [word_boundary_re(t) for t in location_terms(args.location)]
+    if location_patterns and not any(p.search(location) for p in location_patterns):
         return False
 
     return True
@@ -333,7 +385,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--location",
         default="United States",
-        help="Location (word-boundary match). Default: United States",
+        help="Location (word-boundary). Default United States also matches USA, US, U.S.",
     )
     p.add_argument(
         "--any-location",
@@ -364,7 +416,21 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--posted",
         default="1",
-        help="Posted within N days: 1, 3, 7, 30 — or 'any' for no date filter",
+        help=(
+            "How many days to include: 1, 3, 7, 30 — or 'any' for no date filter. "
+            "Default calendar mode: previous N calendar days in --date-tz "
+            "(so 1 = yesterday in New York, not a rolling 24 hours)"
+        ),
+    )
+    p.add_argument(
+        "--date-tz",
+        default=DEFAULT_DATE_TZ,
+        help="Timezone used for calendar posted dates (IANA name)",
+    )
+    p.add_argument(
+        "--posted-window",
+        default="calendar",
+        help="calendar = previous N full days in --date-tz; rolling = last N*24 hours",
     )
     p.add_argument(
         "--exclude",
@@ -428,7 +494,7 @@ def build_parser() -> argparse.ArgumentParser:
         default="",
         help=(
             "Folder for this run's files. "
-            f"Default: {DEFAULT_ARCHIVE_ROOT}/<YYYY-MM-DD_HHMMSS>/"
+            f"Default: {DEFAULT_ARCHIVE_ROOT}/<collected-NY-date>/"
         ),
     )
     p.add_argument(
@@ -451,6 +517,14 @@ def normalize_args(args: argparse.Namespace) -> argparse.Namespace:
     if posted in ("", "any", "all"):
         args.posted = ""
 
+    window = (getattr(args, "posted_window", None) or "calendar").strip().lower()
+    if window not in POSTED_WINDOW_CHOICES:
+        raise SystemExit(
+            f"Invalid --posted-window={window!r}; choose: {', '.join(POSTED_WINDOW_CHOICES)}"
+        )
+    args.posted_window = window
+    args.date_tzinfo = load_date_tz(getattr(args, "date_tz", None) or DEFAULT_DATE_TZ)
+
     preset = (args.preset or "none").strip().lower()
     args.preset = preset
     if preset == "it":
@@ -461,6 +535,7 @@ def normalize_args(args: argparse.Namespace) -> argparse.Namespace:
 
     args.include_patterns = compile_terms(args.include)
     args.exclude_patterns = compile_terms(args.exclude)
+    args.location_patterns = [word_boundary_re(t) for t in location_terms(args.location)]
     return args
 
 
@@ -475,6 +550,8 @@ def filters_dict(args: argparse.Namespace) -> dict:
         "ats": args.ats or None,
         "skill_level": args.skill_level or None,
         "posted": args.posted or None,
+        "posted_window": getattr(args, "posted_window", None),
+        "date_tz": getattr(args, "date_tz", None),
         "exclude": args.exclude or None,
         "include": args.include or None,
         "hide_recruiters": args.hide_recruiters,
@@ -483,11 +560,24 @@ def filters_dict(args: argparse.Namespace) -> dict:
     }
 
 
+def collection_folder_name(args: argparse.Namespace) -> str:
+    """Name the archive folder after the job dates being collected."""
+    if args.posted and getattr(args, "posted_window", "calendar") == "calendar":
+        tz = getattr(args, "date_tzinfo", None) or timezone.utc
+        today = datetime.now(tz).date()
+        days = int(args.posted)
+        oldest = today - timedelta(days=days)
+        newest = today - timedelta(days=1)
+        if oldest == newest:
+            return newest.isoformat()
+        return f"{oldest.isoformat()}_to_{newest.isoformat()}"
+    return datetime.now().strftime("%Y-%m-%d_%H%M%S")
+
+
 def resolve_out_dir(args: argparse.Namespace) -> Path:
     if args.output_dir:
         return Path(args.output_dir)
-    stamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
-    return Path(args.archive_root) / stamp
+    return Path(args.archive_root) / collection_folder_name(args)
 
 
 def write_archive(
@@ -599,6 +689,17 @@ def main() -> int:
     print("Active filters:")
     for key, value in filters_dict(args).items():
         print(f"  {key}: {value}")
+
+    if args.posted and args.posted_window == "calendar":
+        tz = args.date_tzinfo
+        now_local = datetime.now(tz)
+        days = int(args.posted)
+        oldest = now_local.date() - timedelta(days=days)
+        newest = now_local.date() - timedelta(days=1)
+        print(
+            f"Collecting {tz} calendar dates {oldest.isoformat()} .. {newest.isoformat()} "
+            f"(tz now {now_local.strftime('%Y-%m-%d %H:%M')})"
+        )
 
     jobs, meta = fetch_all_jobs(args.chunks_url)
     print(f"Loaded {len(jobs):,} jobs (last_updated={meta.get('last_updated')})")

@@ -42,11 +42,6 @@ scripts/
 ├── geolocation.py      # Location lookup/enrichment for the heatmap
 └── check_anomalies.py  # Per-platform volume anomaly detection on the trend log
 
-filter_jobs/
-├── filter_jobs.py      # Download published chunks and filter/export locally (no scrape)
-├── README.md           # Usage and all CLI filter parameters
-└── archive/            # Date-stamped local exports (gitignored)
-
 js/
 ├── app.js              # Main app class and initialization
 ├── jobs_loader.js      # Progressive chunk loading + Web Worker orchestration
@@ -97,59 +92,6 @@ python -m http.server 8000
 ```
 
 The frontend fetches live chunk data from the data repo's Pages site over the network, so local development works against current data without needing the chunks checked out locally.
-
-### Filter published jobs to local files (no scrape)
-
-To download the already-published chunk data and keep filtered results on disk (default: United States, remote-only, last 24 hours, hide recruiters, **IT title keywords**), see **[filter_jobs/README.md](filter_jobs/README.md)**:
-
-```bash
-cd filter_jobs
-python filter_jobs.py
-# writes filter_jobs/archive/YYYY-MM-DD_HHMMSS/{filters.json,jobs.json,urls.txt,jobs.csv}
-```
-
-## Keeping up to date
-
-There are two different “updates”:
-
-| What | Where it lives | What you do |
-|------|----------------|-------------|
-| **Job listings** (titles, URLs, dates) | [job-board-data](https://feashliaa.github.io/job-board-data/) (updated daily) | Nothing in Git. The site and `filter_jobs.py` already fetch this over the network. |
-| **This repo’s code** (UI, scraper, company lists, `filter_jobs`) | GitHub | Pull this repo for *our* changes. To also take **upstream** (original) code updates, use the shallow sync below. |
-
-This copy of the project is a **small snapshot** (current files only). The original repo ([Feashliaa/job-board-aggregator](https://github.com/Feashliaa/job-board-aggregator)) still has a very large Git history. A normal `git pull upstream main` would download that history and can fail or bloat the repo. **Do not merge the full upstream history.**
-
-### Sync latest *files* from upstream (anyone can do this)
-
-If you cloned **this** repository (not only the original), you can still receive upstream code updates. Add the original repo as `upstream`, fetch **only the latest commit**, and copy its files:
-
-```bash
-# once
-git remote add upstream https://github.com/Feashliaa/job-board-aggregator.git
-
-# each time you want upstream’s latest files
-git fetch --depth 1 upstream main
-git checkout upstream/main -- .
-```
-
-`git checkout upstream/main -- .` copies the original project’s current files on top of yours. The original repo has no `filter_jobs/` folder, so that folder is usually left as-is. Shared files such as `README.md` and `.gitignore` **are** overwritten. If you want to keep this repo’s versions of those two files:
-
-```bash
-git checkout HEAD -- README.md .gitignore
-```
-
-Then finish the sync:
-
-```bash
-git add -A
-git reset -- .venv filter_jobs/archive
-git status
-git commit -m "Sync files from upstream"
-```
-
-After that, `filter_jobs.py` and the UI still load **job listings** from the public data site, so you do not need to scrape or pull job chunks from Git.
-
-**Yes — someone else who cloned your repo can do the same.** They add `upstream` themselves and run the shallow fetch. They do not need your 6GB local `.git` pack.
 
 To run the scraper locally:
 
